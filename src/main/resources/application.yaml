@@ -1,0 +1,20 @@
+spring:
+  application:
+    name: payout-batch-optimizer
+
+  datasource:
+    url: jdbc:postgresql://localhost:5432/payout_batch
+    username: payout
+    password: payout
+
+  data:
+    web:
+      pageable:
+        serialization-mode: via-dto
+
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        default_batch_fetch_size: 50
