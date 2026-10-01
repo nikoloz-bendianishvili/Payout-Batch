@@ -8,6 +8,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.data.jpa.test.autoconfigure.DataJpaTest;
 import org.springframework.context.annotation.Import;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 
@@ -17,6 +18,7 @@ import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 @DataJpaTest
 @Import(TestcontainersConfiguration.class)
@@ -30,14 +32,14 @@ class PayoutBatchRepositoryTest {
 
     @Test
     void saveGeneratesId() {
-        PayoutBatch saved = payoutBatchRepository.save(PayoutBatch.create(new BigDecimal("100")));
+        PayoutBatch saved = payoutBatchRepository.save(PayoutBatch.create(new BigDecimal("100"), null));
 
         assertThat(saved.getId()).isNotNull();
     }
 
     @Test
     void saveStoresBatchAndItems() {
-        PayoutBatch batch = PayoutBatch.create(new BigDecimal("12000"));
+        PayoutBatch batch = PayoutBatch.create(new BigDecimal("12000"), null);
         batch.addPayoutBatchItem("PO-3001", new BigDecimal("4000"), new BigDecimal("90"), false);
         batch.addPayoutBatchItem("PO-3002", new BigDecimal("6000"), new BigDecimal("150"), true);
 
@@ -100,8 +102,42 @@ class PayoutBatchRepositoryTest {
         assertThat(firstPage.getTotalPages()).isEqualTo(2);
     }
 
+    @Test
+    void findByIdempotencyKeyReturnsTheBatchWithThatKey() {
+        PayoutBatch batch = PayoutBatch.create(new BigDecimal("100"), "key-1");
+        batch.addPayoutBatchItem("PO-1", new BigDecimal("50"), new BigDecimal("5"), true);
+        UUID id = saveAndClear(batch);
+
+        Optional<PayoutBatch> found = payoutBatchRepository.findByIdempotencyKey("key-1");
+
+        assertThat(found).map(PayoutBatch::getId).contains(id);
+        assertThat(payoutBatchRepository.findByIdempotencyKey("other-key")).isEmpty();
+    }
+
+    @Test
+    void saveRejectsDuplicateIdempotencyKey() {
+        PayoutBatch first = PayoutBatch.create(new BigDecimal("100"), "key-1");
+        first.addPayoutBatchItem("PO-1", new BigDecimal("50"), new BigDecimal("5"), true);
+        saveAndClear(first);
+
+        PayoutBatch duplicate = PayoutBatch.create(new BigDecimal("200"), "key-1");
+        duplicate.addPayoutBatchItem("PO-2", new BigDecimal("50"), new BigDecimal("5"), true);
+
+        assertThatThrownBy(() -> payoutBatchRepository.save(duplicate))
+                .isInstanceOf(DataIntegrityViolationException.class);
+    }
+
+    @Test
+    void saveAllowsManyBatchesWithoutIdempotencyKey() {
+        saveAndClear(PayoutBatch.create(new BigDecimal("100"), null));
+        saveAndClear(PayoutBatch.create(new BigDecimal("200"), null));
+
+        assertThat(payoutBatchRepository.findAllByOrderByCreatedAtDesc(PageRequest.of(0, 10)).getTotalElements())
+                .isEqualTo(2);
+    }
+
     private UUID saveBatch(String availablePayoutFloat) {
-        return payoutBatchRepository.save(PayoutBatch.create(new BigDecimal(availablePayoutFloat))).getId();
+        return payoutBatchRepository.save(PayoutBatch.create(new BigDecimal(availablePayoutFloat), null)).getId();
     }
 
     private UUID saveAndClear(PayoutBatch batch) {

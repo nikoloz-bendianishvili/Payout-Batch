@@ -2,6 +2,7 @@ package com.example.payout_batch_optimizer.api;
 
 import com.example.payout_batch_optimizer.dto.PayoutBatchRequestDTO;
 import com.example.payout_batch_optimizer.dto.PayoutBatchResponseDTO;
+import com.example.payout_batch_optimizer.exception.InvalidIdempotencyKeyException;
 import com.example.payout_batch_optimizer.service.PayoutBatchService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Min;
@@ -18,11 +19,20 @@ import java.util.UUID;
 @RequiredArgsConstructor
 public class PayoutBatchController {
 
+    private static final int MAX_IDEMPOTENCY_KEY_LENGTH = 255;
+
     private final PayoutBatchService payoutBatchService;
 
     @PostMapping("/optimize")
-    public ResponseEntity<PayoutBatchResponseDTO> createPayoutBatch(@Valid @RequestBody PayoutBatchRequestDTO request) {
-        PayoutBatchResponseDTO response = payoutBatchService.createPayoutBatch(request);
+    public ResponseEntity<PayoutBatchResponseDTO> createPayoutBatch(
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
+            @Valid @RequestBody PayoutBatchRequestDTO request
+    ) {
+        if (idempotencyKey != null && idempotencyKey.length() > MAX_IDEMPOTENCY_KEY_LENGTH) {
+            throw new InvalidIdempotencyKeyException(
+                    "Idempotency-Key must be at most " + MAX_IDEMPOTENCY_KEY_LENGTH + " characters");
+        }
+        PayoutBatchResponseDTO response = payoutBatchService.createPayoutBatch(request, idempotencyKey);
         HttpStatus status = response.selectedPayouts().isEmpty() ? HttpStatus.OK : HttpStatus.CREATED;
         return ResponseEntity.status(status).body(response);
     }

@@ -26,6 +26,8 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -50,7 +52,7 @@ class PayoutBatchServiceTest {
                 payoutRequest("PO-3003", "2500", "55"),
                 payoutRequest("PO-3004", "5000", "115")));
 
-        PayoutBatchResponseDTO response = payoutBatchService.createPayoutBatch(request);
+        PayoutBatchResponseDTO response = payoutBatchService.createPayoutBatch(request, null);
 
         assertThat(response.selectedPayouts())
                 .extracting(SelectedPayoutDTO::requestReference)
@@ -68,7 +70,7 @@ class PayoutBatchServiceTest {
                 payoutRequest("PO-3003", "2500", "55"),
                 payoutRequest("PO-3004", "5000", "115")));
 
-        payoutBatchService.createPayoutBatch(request);
+        payoutBatchService.createPayoutBatch(request, null);
 
         PayoutBatch saved = captureSavedBatch();
         assertThat(saved.getAvailablePayoutFloat()).isEqualByComparingTo("12000");
@@ -86,7 +88,7 @@ class PayoutBatchServiceTest {
                 payoutRequest("PO-1", "500", "50"),
                 payoutRequest("PO-2", "600", "60")));
 
-        PayoutBatchResponseDTO response = payoutBatchService.createPayoutBatch(request);
+        PayoutBatchResponseDTO response = payoutBatchService.createPayoutBatch(request, null);
 
         assertThat(response.selectedPayouts()).isEmpty();
         assertThat(response.totalFloatConsumed()).isEqualByComparingTo("0");
@@ -98,9 +100,37 @@ class PayoutBatchServiceTest {
     }
 
     @Test
+    void createPayoutBatch_newIdempotencyKey_savesBatchWithKey() {
+        PayoutBatchRequestDTO request = new PayoutBatchRequestDTO(new BigDecimal("100"), List.of(
+                payoutRequest("PO-1", "50", "5")));
+        when(payoutBatchRepository.findByIdempotencyKey("key-1")).thenReturn(Optional.empty());
+
+        payoutBatchService.createPayoutBatch(request, "key-1");
+
+        assertThat(captureSavedBatch().getIdempotencyKey()).isEqualTo("key-1");
+    }
+
+    @Test
+    void createPayoutBatch_existingIdempotencyKey_returnsStoredBatchWithoutSaving() {
+        PayoutBatch stored = PayoutBatch.create(new BigDecimal("100"), "key-1");
+        stored.addPayoutBatchItem("PO-1", new BigDecimal("50"), new BigDecimal("5"), true);
+        when(payoutBatchRepository.findByIdempotencyKey("key-1")).thenReturn(Optional.of(stored));
+
+        PayoutBatchRequestDTO request = new PayoutBatchRequestDTO(new BigDecimal("100"), List.of(
+                payoutRequest("PO-1", "50", "5")));
+        PayoutBatchResponseDTO response = payoutBatchService.createPayoutBatch(request, "key-1");
+
+        assertThat(response.createdAt()).isEqualTo(stored.getCreatedAt());
+        assertThat(response.selectedPayouts())
+                .extracting(SelectedPayoutDTO::requestReference)
+                .containsExactly("PO-1");
+        verify(payoutBatchRepository, never()).save(any());
+    }
+
+    @Test
     void getPayoutBatchById_found_returnsOnlySelectedPayouts() {
         UUID id = UUID.randomUUID();
-        PayoutBatch batch = PayoutBatch.create(new BigDecimal("12000"));
+        PayoutBatch batch = PayoutBatch.create(new BigDecimal("12000"), null);
         batch.addPayoutBatchItem("PO-3001", new BigDecimal("4000"), new BigDecimal("90"), false);
         batch.addPayoutBatchItem("PO-3002", new BigDecimal("6000"), new BigDecimal("150"), true);
         when(payoutBatchRepository.findById(id)).thenReturn(Optional.of(batch));
@@ -130,7 +160,7 @@ class PayoutBatchServiceTest {
     @Test
     void getAllPayoutBatches_passesPageAndSizeAndMapsEachBatch() {
         PageRequest pageRequest = PageRequest.of(1, 5);
-        PayoutBatch batch = PayoutBatch.create(new BigDecimal("100"));
+        PayoutBatch batch = PayoutBatch.create(new BigDecimal("100"), null);
         batch.addPayoutBatchItem("PO-1", new BigDecimal("50"), new BigDecimal("5"), true);
         when(payoutBatchRepository.findAllByOrderByCreatedAtDesc(pageRequest))
                 .thenReturn(new PageImpl<>(List.of(batch), pageRequest, 6));

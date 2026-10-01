@@ -14,5 +14,7 @@ public interface PayoutBatchRepository extends Repository<PayoutBatch, UUID> {
 
     Optional<PayoutBatch> findById(UUID id);
 
+    Optional<PayoutBatch> findByIdempotencyKey(String idempotencyKey);
+
     Page<PayoutBatch> findAllByOrderByCreatedAtDesc(Pageable pageable);
 }

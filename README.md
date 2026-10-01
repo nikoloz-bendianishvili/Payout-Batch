@@ -59,7 +59,7 @@ The service listens on `http://localhost:8080`.
 
 | Method | Path                                  | Description                                  | Status        |
 |--------|---------------------------------------|----------------------------------------------|---------------|
-| POST   | `/api/v1/payout-batches/optimize`     | Run the optimization and persist the result  | 201 / 200 / 400 |
+| POST   | `/api/v1/payout-batches/optimize`     | Run the optimization and persist the result  | 201 / 200 / 400 / 409 |
 | GET    | `/api/v1/payout-batches/{batchId}`    | Get a persisted batch by id                  | 200 / 404 / 400 |
 | GET    | `/api/v1/payout-batches?page=&size=`  | Paginated audit trail, newest first          | 200 / 400     |
 
@@ -151,6 +151,24 @@ Input rules:
 - Malformed JSON or wrong value types also return `400`.
 - A batch too large to optimize (number of requests × float in cents above the configured limit) returns `400`.
 
+#### Idempotent retries (optional)
+
+The spec does not require this; it was added so a retried request cannot create a duplicate batch. A client can send an optional `Idempotency-Key` header (at most 255 characters). If a batch with that key already exists, the stored batch is returned with the same status as the first call, and nothing new is optimized or saved. Requests without the header behave as described above.
+
+```bash
+curl -i -X POST http://localhost:8080/api/v1/payout-batches/optimize \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: 7c1e2a9b-retry-example" \
+  -d '{
+    "availablePayoutFloat": 12000,
+    "payoutRequests": [
+      { "requestReference": "PO-3001", "payoutAmount": 4000, "agentCommission": 90 }
+    ]
+  }'
+```
+
+Sending the same command again returns the same `batchId`. If two requests with the same new key arrive at the same moment, the database's unique constraint lets only one be saved, and the other gets `409 Conflict`. A key longer than 255 characters returns `400`.
+
 ### 2. Get a batch by id
 
 ```bash
@@ -231,7 +249,7 @@ Response `200 OK`:
 
 ## Database Schema
 
-Managed by Flyway: `src/main/resources/db/migration/V1__create_payout_batch_tables.sql`.
+Managed by Flyway: `src/main/resources/db/migration/V1__create_payout_batch_tables.sql` and `V2__add_idempotency_key.sql`.
 
 **`payout_batch`**: one row per optimization run.
 
@@ -242,6 +260,7 @@ Managed by Flyway: `src/main/resources/db/migration/V1__create_payout_batch_tabl
 | `total_float_consumed`   | `NUMERIC(19,2)` | Sum of `payout_amount` of selected items |
 | `total_agent_commission` | `NUMERIC(19,2)` | Sum of `agent_commission` of selected items |
 | `created_at`             | `TIMESTAMPTZ`   | Time of the run                         |
+| `idempotency_key`        | `VARCHAR(255)`  | Optional, `UNIQUE`; `NULL` when the client sent no key |
 
 **`payout_batch_item`**: one row per candidate payout request of a run, selected or not.
 
@@ -260,6 +279,7 @@ Each run stores its full input (`available_payout_float` and every candidate) to
 
 - `idx_payout_batch_created_at` on `payout_batch (created_at DESC)`: serves the list endpoint, which sorts by `created_at` newest first and paginates.
 - `idx_payout_batch_item_batch_id` on `payout_batch_item (payout_batch_id)`: serves loading the items of a batch (by id and for each page of the list). PostgreSQL does not index foreign key columns automatically.
+- The `UNIQUE` constraint on `payout_batch (idempotency_key)` creates an index automatically, which serves the lookup by key. PostgreSQL treats `NULL`s as distinct, so any number of batches can have no key.
 
 ## Project Structure
 
@@ -271,7 +291,7 @@ src/main/java/com/example/payout_batch_optimizer
 ├── optimizer      # Optimizer (0/1 knapsack algorithm), PayoutCandidate, PayoutDecision
 ├── entity         # PayoutBatch, PayoutBatchItem
 ├── persistence    # PayoutBatchRepository
-└── exception      # PayoutBatchNotFoundException, BatchTooLargeException
+└── exception      # PayoutBatchNotFoundException, BatchTooLargeException, InvalidIdempotencyKeyException
 ```
 
 ## Tests

@@ -1,8 +1,10 @@
 package com.example.payout_batch_optimizer.api;
 
 import com.example.payout_batch_optimizer.exception.BatchTooLargeException;
+import com.example.payout_batch_optimizer.exception.InvalidIdempotencyKeyException;
 import com.example.payout_batch_optimizer.exception.PayoutBatchNotFoundException;
 import org.springframework.context.MessageSourceResolvable;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
@@ -28,6 +30,16 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(BatchTooLargeException.class)
     public ResponseEntity<ErrorResponse> handleBatchTooLarge(BatchTooLargeException ex) {
         return build(HttpStatus.BAD_REQUEST, ex.getMessage(), List.of());
+    }
+
+    @ExceptionHandler(InvalidIdempotencyKeyException.class)
+    public ResponseEntity<ErrorResponse> handleInvalidIdempotencyKey(InvalidIdempotencyKeyException ex) {
+        return build(HttpStatus.BAD_REQUEST, ex.getMessage(), List.of());
+    }
+
+    @ExceptionHandler(DataIntegrityViolationException.class)
+    public ResponseEntity<ErrorResponse> handleDataIntegrityViolation(DataIntegrityViolationException ex) {
+        return build(HttpStatus.CONFLICT, "A request with this Idempotency-Key is already being processed", List.of());
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)

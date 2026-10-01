@@ -13,6 +13,7 @@ import org.junit.jupiter.params.provider.MethodSource;
 import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.http.MediaType;
@@ -28,6 +29,8 @@ import java.util.stream.Stream;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.hasSize;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -53,7 +56,7 @@ class PayoutBatchControllerTest {
 
     @Test
     void optimize_validRequest_returns201WithResult() throws Exception {
-        when(payoutBatchService.createPayoutBatch(any())).thenReturn(sampleResponse());
+        when(payoutBatchService.createPayoutBatch(any(), any())).thenReturn(sampleResponse());
 
         mockMvc.perform(post(BASE_URL + "/optimize")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -79,7 +82,7 @@ class PayoutBatchControllerTest {
 
     @Test
     void optimize_nothingSelected_returns200WithEmptyList() throws Exception {
-        when(payoutBatchService.createPayoutBatch(any())).thenReturn(new PayoutBatchResponseDTO(
+        when(payoutBatchService.createPayoutBatch(any(), any())).thenReturn(new PayoutBatchResponseDTO(
                 BATCH_ID, List.of(), new BigDecimal("0.00"), new BigDecimal("0.00"),
                 Instant.parse("2026-09-07T09:00:00Z")));
 
@@ -93,7 +96,7 @@ class PayoutBatchControllerTest {
 
     @Test
     void optimize_passesParsedRequestToService() throws Exception {
-        when(payoutBatchService.createPayoutBatch(any())).thenReturn(sampleResponse());
+        when(payoutBatchService.createPayoutBatch(any(), any())).thenReturn(sampleResponse());
 
         mockMvc.perform(post(BASE_URL + "/optimize")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -101,7 +104,7 @@ class PayoutBatchControllerTest {
                 .andExpect(status().isCreated());
 
         ArgumentCaptor<PayoutBatchRequestDTO> captor = ArgumentCaptor.forClass(PayoutBatchRequestDTO.class);
-        verify(payoutBatchService).createPayoutBatch(captor.capture());
+        verify(payoutBatchService).createPayoutBatch(captor.capture(), isNull());
 
         PayoutBatchRequestDTO received = captor.getValue();
         assertThat(received.availablePayoutFloat()).isEqualByComparingTo("12000.50");
@@ -109,6 +112,44 @@ class PayoutBatchControllerTest {
         assertThat(received.payoutRequests().get(0).requestReference()).isEqualTo("PO-1");
         assertThat(received.payoutRequests().get(0).payoutAmount()).isEqualByComparingTo("100");
         assertThat(received.payoutRequests().get(0).agentCommission()).isEqualByComparingTo("5");
+    }
+
+    @Test
+    void optimize_withIdempotencyKey_passesKeyToService() throws Exception {
+        when(payoutBatchService.createPayoutBatch(any(), any())).thenReturn(sampleResponse());
+
+        mockMvc.perform(post(BASE_URL + "/optimize")
+                        .header("Idempotency-Key", "key-1")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(request("100", "[" + VALID_ITEM + "]")))
+                .andExpect(status().isCreated());
+
+        verify(payoutBatchService).createPayoutBatch(any(), eq("key-1"));
+    }
+
+    @Test
+    void optimize_idempotencyKeyLongerThan255Chars_returns400() throws Exception {
+        mockMvc.perform(post(BASE_URL + "/optimize")
+                        .header("Idempotency-Key", "A".repeat(256))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(request("100", "[" + VALID_ITEM + "]")))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value("Idempotency-Key must be at most 255 characters"));
+
+        verifyNoInteractions(payoutBatchService);
+    }
+
+    @Test
+    void optimize_sameKeyInsertedConcurrently_returns409() throws Exception {
+        when(payoutBatchService.createPayoutBatch(any(), any()))
+                .thenThrow(new DataIntegrityViolationException("duplicate key"));
+
+        mockMvc.perform(post(BASE_URL + "/optimize")
+                        .header("Idempotency-Key", "key-1")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(request("100", "[" + VALID_ITEM + "]")))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.message").value("A request with this Idempotency-Key is already being processed"));
     }
 
     @ParameterizedTest(name = "{0}")

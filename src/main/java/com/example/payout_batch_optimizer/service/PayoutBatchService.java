@@ -17,6 +17,7 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 @Service
@@ -27,7 +28,14 @@ public class PayoutBatchService {
     private final Optimizer optimizer;
 
     @Transactional
-    public PayoutBatchResponseDTO createPayoutBatch(PayoutBatchRequestDTO request) {
+    public PayoutBatchResponseDTO createPayoutBatch(PayoutBatchRequestDTO request, String idempotencyKey) {
+        if (idempotencyKey != null) {
+            Optional<PayoutBatch> existing = payoutBatchRepository.findByIdempotencyKey(idempotencyKey);
+            if (existing.isPresent()) {
+                return toResponse(existing.get());
+            }
+        }
+
         List<PayoutDecision> payoutDecisions = optimizer.optimizePayoutBatch(
                 request.payoutRequests().stream()
                         .map(this::toPayoutCandidate)
@@ -35,7 +43,7 @@ public class PayoutBatchService {
                 request.availablePayoutFloat()
         );
 
-        PayoutBatch payoutBatch = PayoutBatch.create(request.availablePayoutFloat());
+        PayoutBatch payoutBatch = PayoutBatch.create(request.availablePayoutFloat(), idempotencyKey);
         for (PayoutDecision decision : payoutDecisions) {
             PayoutCandidate payoutCandidate = decision.payoutCandidate();
             payoutBatch.addPayoutBatchItem(

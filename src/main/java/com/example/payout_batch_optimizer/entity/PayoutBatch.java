@@ -33,16 +33,20 @@ public class PayoutBatch {
     @Column(nullable = false)
     private Instant createdAt;
 
+    @Column(name = "idempotency_key", unique = true)
+    private String idempotencyKey;
+
     @OneToMany(mappedBy = "payoutBatch", cascade = CascadeType.ALL)
     @OrderBy("id")
     private List<PayoutBatchItem> payoutBatchItems = new ArrayList<>();
 
-    public static PayoutBatch create(BigDecimal availablePayoutFloat) {
+    public static PayoutBatch create(BigDecimal availablePayoutFloat, String idempotencyKey) {
         PayoutBatch payoutBatch = new PayoutBatch();
         payoutBatch.totalFloatConsumed = BigDecimal.ZERO.setScale(2);
         payoutBatch.totalAgentCommission = BigDecimal.ZERO.setScale(2);
         payoutBatch.availablePayoutFloat = availablePayoutFloat.setScale(2);
         payoutBatch.createdAt = Instant.now().truncatedTo(ChronoUnit.MICROS);
+        payoutBatch.idempotencyKey = idempotencyKey;
         return payoutBatch;
     }
 

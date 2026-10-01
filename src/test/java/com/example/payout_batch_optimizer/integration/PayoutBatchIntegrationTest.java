@@ -158,6 +158,28 @@ class PayoutBatchIntegrationTest {
     }
 
     @Test
+    void optimize_sameIdempotencyKeyTwice_returnsSameBatchAndSavesOnce() throws Exception {
+        String firstBody = mockMvc.perform(post(BASE_URL + "/optimize")
+                        .header("Idempotency-Key", "retry-key-1")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(SPEC_EXAMPLE))
+                .andExpect(status().isCreated())
+                .andReturn().getResponse().getContentAsString();
+
+        String secondBody = mockMvc.perform(post(BASE_URL + "/optimize")
+                        .header("Idempotency-Key", "retry-key-1")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(SPEC_EXAMPLE))
+                .andExpect(status().isCreated())
+                .andReturn().getResponse().getContentAsString();
+
+        String firstId = JsonPath.read(firstBody, "$.batchId");
+        String secondId = JsonPath.read(secondBody, "$.batchId");
+        assertThat(secondId).isEqualTo(firstId);
+        assertThat(countBatches()).isEqualTo(1);
+    }
+
+    @Test
     void getById_unknownId_returns404() throws Exception {
         mockMvc.perform(get(BASE_URL + "/{batchId}", UUID.randomUUID()))
                 .andExpect(status().isNotFound());
